@@ -15,21 +15,35 @@ THRESHOLD_COMMAND_LINE_POSITION <- 3
 
 INPUT_FILE_DIRECTORY <- "/Users/timothystone/Desktop/LSHTM/"
 OUTPUT_DIRECTORY <- INPUT_FILE_DIRECTORY
+OUTPUT_FILENAME <- "CP_ClusterAssignment.tsv"
 METADATA_FILE_DIRECTORY <- INPUT_FILE_DIRECTORY
+METADATA_FILENAME = "metadata_2020-06-08.tsv"
+
 LOGFILE_DIRECTORY <- INPUT_FILE_DIRECTORY
-INPUT_LOG_FILE_SEARCH_PATTERN <- "log.txt"
+INPUT_LOGFILE_SEARCH_PATTERN <- "clusterPicks_log.txt"
 
 # FILENAMES
-METADATA_FILENAME = "DummyMetadata.csv"
+if (grepl("csv$", METADATA_FILENAME, perl = T)) {
+  metadata <- read.csv(paste(METADATA_FILE_DIRECTORY, METADATA_FILENAME, sep=""))
+} else { 
+  metadata <- fread(paste(METADATA_FILE_DIRECTORY, METADATA_FILENAME, sep=""), header=T, na.strings = "?")
+}
+
+input_logfile <- dir(INPUT_FILE_DIRECTORY, pattern = INPUT_LOGFILE_SEARCH_PATTERN)
+output_filename <- paste(OUTPUT_DIRECTORY, OUTPUT_FILENAME, sep="")
 
 ## PACKAGES ##
 
 library(magrittr)
 library(stringr)
 library(dplyr)
+library(data.table)
 
 # File prefix for log, includes a timestamp (date + hour_minutes)
 timestamp <- gsub(":", "_", Sys.time()) %>% gsub("^(.+)_\\d{2}$", "\\1", .)
+if (IS_WRITING_TO_LOGFILE) {
+  output_logfile <- paste(LOGFILE_DIRECTORY, "CP_assignment_", timestamp,".log.txt", sep="")
+}
 
 # Use default UK threshold, but change it if command line value specified, and it exists
 uk_threshold <- DEFAULT_UK_THRESHOLD
@@ -41,68 +55,85 @@ if (IS_USING_COMMAND_LINE_INPUT) {
   }
 }
 
-metadata <- read.csv(paste(METADATA_FILE_DIRECTORY, METADATA_FILENAME, sep=""))
-input_log_file <- dir(INPUT_FILE_DIRECTORY, pattern = INPUT_LOG_FILE_SEARCH_PATTERN)
-output_log_file <- paste(LOGFILE_DIRECTORY, timestamped_filename,".log.txt", sep="")
-
-if (nchar(input_log_file) == 0) {
+if (nchar(input_logfile) == 0) {
   if (IS_WRITING_TO_LOGFILE) {
-    cat(paste(OUTPUT_DIRECTORY, "\nNo Input logfile for file", ), file = output_log_file, append = T)
+    cat(paste("No Input logfile found at",input_logfile,"\n" ), file = output_logfile, append = T)
   }
   stop("There is no logfile\n")
 }
 
-input_log_filehandle <- file(paste(INPUT_FILE_DIRECTORY, "/",input_log_file, sep=""), "r")
-this_line <- readLines(input_log_filehandle, n = 1)
-
+input_logfilehandle <- file(paste(INPUT_FILE_DIRECTORY, "/",input_logfile, sep=""), "r")
 sample_data_frame <- data.frame()
 
+line <- readLines(input_logfilehandle, n = 1)
 is_logfile_readable <- (1)
 while (is_logfile_readable) {
   
-  if (grepl("^\\d+\\s+\\d", this_line)) {
-    cluster_number <- str_extract(this_line, "^\\d+") %>% as.numeric()
-    cat("Cluster Number is ", cluster_number, '\n')
-    cluster_data <- strsplit(this_line, "\t")
-    samples <- gsub("\\[(.*)\\]","\\1", cluster_data[[1]][4]) %>% strsplit(., ", ")
-    bootstrap <- cluster_data[[1]][5]
-    genetic_distance <- cluster_data[[1]][6]
-    samples <- samples[[1]]
-    uk_sample_reference <- grep("England|Scotland|Wales|Northern Ireland", samples)
-    if (length (samples) / length(uk_sample_reference)    < uk_threshold) {
-      next()
+  #Check to see if there is a number + space in order to grab cluster info from logfile.  
+  if (grepl("^\\d+\\s+\\d", line)) {
+    cluster_number <- str_extract(line, "^\\d+") %>% as.numeric()
+    
+    if (IS_WRITING_TO_LOGFILE) {
+      cat("Cluster: ", cluster_number,":" , file = output_logfile, append = T)
     }
-     
-    remaining_uk_samples <- strsplit(samples[uk_sample_reference], "/")  
-    uk_nation <- lapply(remaining_uk_samples, `[[`, 2) %>% unlist()
-    id <- lapply(remaining_uk_samples, `[[`, 4) %>% gsub(".*\\|(.+)\\|.+$", "\\1", .) %>% unlist() 
-    date <- lapply(remaining_uk_samples, `[[`, 4) %>% gsub(".*\\|.+\\|(.+)$", "\\1", .) %>% unlist() 
-    city <- lapply(remaining_uk_samples, `[[`, 3) %>% gsub("([^-]+).*$", "\\1", ., perl = T) %>% unlist() 
-    full_city <- lapply(remaining_uk_samples, `[[`, 3) %>% unlist()
     
-    cluster_data_frame <- data.frame(Sample.id = id, Cluster.number = cluster_number, UK.location = uk_nation, Fasta.date = date,
-                                     FastaFile.ctiy = city, FastaFile.FullCity = full_city)
-    cluster_data_frame <- left_join(cluster_data_frame, metadata, by = "Sample.id")
+    #cat("Cluster Number is ", cluster_number, '\n')
     
+    tip_data <- strsplit(line, "\t")
+    tip_members <- gsub("\\[(.*)\\]","\\1", cluster_data[[1]][4]) %>% strsplit(., ", ")
+    tip_members <- tip_members[[1]]
     
-    # Add the age groups using the cut() function and turn it into a numeric vector
-    cluster_data_frame <- mutate(cluster_data_frame, Age.Group = as.numeric(cut(Age, c(0, AGE_BOUNDARY, Inf))))
+    uk_sample_reference <- grep("England|Scotland|Wales|Northern Ireland", tip_members)
+    uk_proportion <- length(uk_sample_reference) / length(tip_members)
     
+    bootstrap <- tip_data[[1]][5]
+    genetic_distance <- tip_data[[1]][6]
     
-    
-    sample_data_frame <- rbind(sample_data_frame, cluster_data_frame)
-    
-  }
+    # Reject tip if not containing sufficient UK proportion, process file otherwise
+    if (uk_proportion < uk_threshold) {
+      if (IS_WRITING_TO_LOGFILE) {
+        cat("\tUK Content=" ,uk_proportion, "\tRejected\n", file = output_logfile, append = T)
+      }
+    } else {
+      
+      # Extract the relevant information from the tip data using string-split and regular expressions, unlist them into vectors
+      remaining_uk_samples <- strsplit(tip_members[uk_sample_reference], "/")  
+      uk_nation <- lapply(remaining_uk_samples, `[[`, 2) %>% unlist()
+      id <- lapply(remaining_uk_samples, `[[`, 4) %>% gsub(".*\\|(.+)\\|.+$", "\\1", .) %>% unlist() 
+      date <- lapply(remaining_uk_samples, `[[`, 4) %>% gsub(".*\\|.+\\|(.+)$", "\\1", .) %>% unlist() 
+      city <- lapply(remaining_uk_samples, `[[`, 3) %>% gsub("([^-]+).*$", "\\1", ., perl = T) %>% unlist() 
+      full_city <- lapply(remaining_uk_samples, `[[`, 3) %>% unlist()
+      
+      cluster_data_frame <- data.frame(gisaid_epi_isl = id, ClusterNumber = cluster_number, UKLocation = uk_nation, TipIDDate = date,
+                                       TipIDCity = city, TipIDFullCity = full_city, Bootstrap = bootstrap, GD = genetic_distance)
+      cluster_data_frame <- left_join(cluster_data_frame, metadata, by = "gisaid_epi_isl")
+      
+      # Add the age groups using the cut() function and turn it into a numeric vector
+      # Lower bound = 0, Upper bound = Infinity
+      cluster_data_frame <- mutate(cluster_data_frame, age.Group = as.numeric(cut(age, c(0, AGE_BOUNDARY, Inf))))
+      
+      sample_data_frame <- rbind(sample_data_frame, cluster_data_frame)
+      
+      if (IS_WRITING_TO_LOGFILE) {
+        cat("\tUK Content=" ,uk_proportion, "\tAccepted\n", file = output_logfile, append = T)
+      }
+    }
+  }  
   
-  this_line <- readLines(input_log_filehandle, n = 1)    
-  if (length(this_line) == 0) {
+  # Read the next line and continue if readable
+  line <- readLines(input_logfilehandle, n = 1)    
+  if (length(line) == 0) {
     is_logfile_readable <- 0
   } 
 }
 
-close(input_log_filehandle)
+close(input_logfilehandle)
 
-output_filename <- paste(OUTPUT_DIRECTORY, "CP_ClusterAssignment.csv", sep="")
-write.csv(sample_data_frame, file = output_filename, row.names=F)
+if (grepl("csv$", output_filename)) {
+  write.csv(sample_data_frame, file = output_filename, row.names=F)
+} else {
+  write.table(sample_data_frame, file = output_filename, row.names=F, sep="\t")
+}
+
 
 
