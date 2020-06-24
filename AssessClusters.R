@@ -1,3 +1,12 @@
+COMMON_FILE_DIRECTORY <- "/Users/timothystone/Desktop/LSHTM/"
+
+## PACKAGES ##
+
+library(magrittr)
+library(stringr)
+library(dplyr)
+library(data.table)
+
 ## PARAMETER SETTINGS
 
 AGE_BOUNDARY <- c(20, 40, 60) # Do not include 0 or a maximum value, these will be added (max=Inf)
@@ -5,21 +14,20 @@ DEFAULT_UK_THRESHOLD <- 0.65
 
 ## FLAG CONSTANTS ##
 
-IS_WRITING_TO_LOGFILE <- TRUE
-IS_USING_COMMAND_LINE_INPUT <- TRUE
+IS_WRITING_TO_LOGFILE <- FALSE
+IS_USING_COMMAND_LINE_INPUT <- FALSE
 
 # The location on the command line of the threshold
 THRESHOLD_COMMAND_LINE_POSITION <- 3
 
 # DIRECTORY LOCATIONS (in case the files are located in different places)
 
-INPUT_FILE_DIRECTORY <- "/Users/timothystone/Desktop/LSHTM/"
-OUTPUT_DIRECTORY <- INPUT_FILE_DIRECTORY
+INPUT_FILE_DIRECTORY <- COMMON_FILE_DIRECTORY
+OUTPUT_DIRECTORY <- COMMON_FILE_DIRECTORY
 OUTPUT_FILENAME <- "CP_ClusterAssignment.tsv"
-METADATA_FILE_DIRECTORY <- INPUT_FILE_DIRECTORY
+METADATA_FILE_DIRECTORY <- COMMON_FILE_DIRECTORY
 METADATA_FILENAME = "metadata_2020-06-08.tsv"
-
-LOGFILE_DIRECTORY <- INPUT_FILE_DIRECTORY
+LOGFILE_DIRECTORY <- COMMON_FILE_DIRECTORY
 INPUT_LOGFILE_SEARCH_PATTERN <- "clusterPicks_log.txt"
 
 # FILENAMES
@@ -32,12 +40,6 @@ if (grepl("csv$", METADATA_FILENAME, perl = T)) {
 input_logfile <- dir(INPUT_FILE_DIRECTORY, pattern = INPUT_LOGFILE_SEARCH_PATTERN)
 output_filename <- paste(OUTPUT_DIRECTORY, OUTPUT_FILENAME, sep="")
 
-## PACKAGES ##
-
-library(magrittr)
-library(stringr)
-library(dplyr)
-library(data.table)
 
 # File prefix for log, includes a timestamp (date + hour_minutes)
 timestamp <- gsub(":", "_", Sys.time()) %>% gsub("^(.+)_\\d{2}$", "\\1", .)
@@ -83,7 +85,7 @@ while (is_logfile_readable) {
     tip_members <- gsub("\\[(.*)\\]","\\1", cluster_data[[1]][4]) %>% strsplit(., ", ")
     tip_members <- tip_members[[1]]
     
-    uk_sample_reference <- grep("England|Scotland|Wales|Northern Ireland", tip_members)
+    uk_sample_reference <- grep("England|Scotland|Wales|Northern Ireland|United Kingdom", tip_members, perl=T)
     uk_proportion <- length(uk_sample_reference) / length(tip_members)
     
     bootstrap <- tip_data[[1]][5]
@@ -134,6 +136,3 @@ if (grepl("csv$", output_filename)) {
 } else {
   write.table(sample_data_frame, file = output_filename, row.names=F, sep="\t")
 }
-
-
-
